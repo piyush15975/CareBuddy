@@ -1,15 +1,33 @@
 import { db } from "@/config/db";
 import { SessionChatTable } from "@/config/schema";
-import { currentUser } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 import { desc, eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { v4 as uuidv4 } from "uuid";
 
+function getUserEmailFromAuth() {
+  const { sessionClaims } = auth();
+  const claims = sessionClaims as Record<string, any> | undefined;
+
+  return (
+    claims?.email ??
+    claims?.emailAddress ??
+    claims?.primaryEmailAddress?.emailAddress ??
+    claims?.email_addresses?.[0]?.email_address ??
+    null
+  );
+}
+
+function getUserEmailFromRequest(req: NextRequest, bodyEmail?: string) {
+  const { searchParams } = new URL(req.url);
+
+  return bodyEmail ?? searchParams.get("userEmail") ?? getUserEmailFromAuth();
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { notes, selectedDoctor } = await req.json();
-    const user = await currentUser();
-    const userEmail = user?.primaryEmailAddress?.emailAddress;
+    const { notes, selectedDoctor, userEmail: bodyEmail } = await req.json();
+    const userEmail = getUserEmailFromRequest(req, bodyEmail);
 
     if (!userEmail) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -41,8 +59,7 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const sessionId = searchParams.get("sessionId");
-    const user = await currentUser();
-    const userEmail = user?.primaryEmailAddress?.emailAddress;
+    const userEmail = getUserEmailFromRequest(req);
 
     if (!userEmail) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

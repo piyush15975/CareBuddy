@@ -18,6 +18,7 @@ import axios from "axios";
 import SuggestedDoctorCard from "./SuggestedDoctorCard";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
+import { useUser } from "@clerk/nextjs";
 
 export type doctorAgent = {
   id: number;
@@ -34,6 +35,7 @@ function AddNewSessionDialog() {
   const [selectedDoctor, setSelectedDoctor] = useState<doctorAgent>();
   const [currentStep, setCurrentStep] = useState<"details" | "select">("details");
   const router = useRouter();
+  const { user } = useUser();
 
   const OnClickNext = async () => {
     setLoading(true);
@@ -55,6 +57,7 @@ function AddNewSessionDialog() {
       const result = await axios.post("/api/session-chat", {
         notes: note,
         selectedDoctor: selectedDoctor,
+        userEmail: user?.primaryEmailAddress?.emailAddress,
       });
       if (result.data?.sessionId) {
         router.push("/dashboard/medical-agent/" + result.data.sessionId);

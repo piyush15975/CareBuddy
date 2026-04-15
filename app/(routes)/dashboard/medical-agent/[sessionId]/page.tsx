@@ -10,6 +10,7 @@ import Vapi from "@vapi-ai/web";
 import { Messages } from "openai/resources/chat/completions.mjs";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
+import { useUser } from "@clerk/nextjs";
 
 export type doctorAgent = {
   id: number;
@@ -42,6 +43,50 @@ function MedicalVoiceAgent() {
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+  const { user } = useUser();
+
+  const getErrorText = (error: unknown) => {
+    if (typeof error === "string") {
+      return error.toLowerCase();
+    }
+
+    if (error && typeof error === "object") {
+      const maybeError = error as Record<string, unknown>;
+      const parts = [
+        maybeError.message,
+        maybeError.reason,
+        maybeError.type,
+        maybeError.error,
+      ]
+        .filter(Boolean)
+        .map((item) => String(item).toLowerCase());
+
+      let serialized = "";
+      try {
+        serialized = JSON.stringify(error).toLowerCase();
+      } catch {
+        serialized = "";
+      }
+
+      return `${parts.join(" ")} ${serialized}`.trim();
+    }
+
+    return "";
+  };
+
+  const isMeetingClosedError = (error: unknown) => {
+    const text = getErrorText(error);
+    if (!text || text === "{}") {
+      return true;
+    }
+
+    return (
+      text.includes("meeting has ended") ||
+      text.includes("meeting ended") ||
+      text.includes("ejection") ||
+      text.includes("ejected")
+    );
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -79,10 +124,12 @@ function MedicalVoiceAgent() {
   const handleCallStart = () => {
     setCallStarted(true);
     setCallDuration(0);
+    setLoading(false);
   };
 
   const handleCallEnd = () => {
     setCallStarted(false);
+    setLoading(false);
   };
 
   const handleMessage = (message: any) => {
@@ -112,9 +159,27 @@ function MedicalVoiceAgent() {
   const handleSpeechStart = () => setRole("assistant");
   const handleSpeechEnd = () => setRole("user");
 
-  const StartCall = () => {
+  const StartCall = async () => {
+    const apiKey = process.env.NEXT_PUBLIC_VAPI_API_KEY;
+    const assistantId = process.env.NEXT_PUBLIC_VAPI_VOICE_ASSISTANT_ID;
+
+    if (!apiKey || !assistantId) {
+      toast.error("Voice assistant is not configured. Please check Vapi environment variables.");
+      return;
+    }
+
     setLoading(true);
-    const vapi = new Vapi(process.env.NEXT_PUBLIC_VAPI_API_KEY!);
+
+    if (vapiInstance) {
+      try {
+        vapiInstance.stop();
+      } catch {
+        // Ignore stale instance stop failures.
+      }
+      setVapiInstance(null);
+    }
+
+    const vapi = new Vapi(apiKey);
     setVapiInstance(vapi);
 
     vapi.on("call-start", handleCallStart);
@@ -123,18 +188,39 @@ function MedicalVoiceAgent() {
     vapi.on("speech-start", handleSpeechStart);
     vapi.on("speech-end", handleSpeechEnd);
     vapi.on("error", (error: any) => {
-      console.error("VAPI Error:", error);
-      toast.error("Connection error. Please try again.");
+      if (isMeetingClosedError(error)) {
+        toast.info("This meeting is already closed. Start a new consultation call.");
+      } else {
+        console.error("VAPI Error:", error);
+        toast.error("Connection error. Please try again.");
+      }
       setLoading(false);
+      setCallStarted(false);
     });
 
-    vapi.start(process.env.NEXT_PUBLIC_VAPI_VOICE_ASSISTANT_ID);
+    try {
+      await vapi.start(assistantId);
+    } catch (error: any) {
+      if (isMeetingClosedError(error)) {
+        toast.info("This meeting is already closed. Please start the call again.");
+      } else {
+        console.error("VAPI Start Error:", error);
+        toast.error("Unable to start consultation. Please try again.");
+      }
+      setLoading(false);
+      setCallStarted(false);
+      setVapiInstance(null);
+    }
   };
 
   const endCall = async () => {
     setLoading(true);
     if (vapiInstance) {
-      vapiInstance.stop();
+      try {
+        vapiInstance.stop();
+      } catch {
+        // Ignore stale instance stop failures.
+      }
       setVapiInstance(null);
     }
     setCallStarted(false);
@@ -160,14 +246,31 @@ function MedicalVoiceAgent() {
   };
 
   useEffect(() => {
-    if (sessionId) {
+    if (sessionId && user) {
       GetSessionDetails();
     }
-  }, [sessionId]);
+  }, [sessionId, user]);
+
+  useEffect(() => {
+    return () => {
+      if (vapiInstance) {
+        try {
+          vapiInstance.stop();
+        } catch {
+          // Ignore stale instance stop failures.
+        }
+      }
+    };
+  }, [vapiInstance]);
 
   const GetSessionDetails = async () => {
     try {
-      const result = await axios.get("/api/session-chat?sessionId=" + sessionId);
+      const result = await axios.get("/api/session-chat", {
+        params: {
+          sessionId,
+          userEmail: user?.primaryEmailAddress?.emailAddress,
+        },
+      });
       setSessionDetail(result.data);
     } catch (error) {
       console.error("Error fetching session details:", error);

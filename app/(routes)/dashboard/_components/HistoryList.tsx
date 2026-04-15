@@ -8,6 +8,7 @@ import HistoryTable from "./HistoryTable";
 import { doctorAgent } from "./SuggestedDoctorCard";
 import { motion } from "framer-motion";
 import { Calendar, FileText, Clock, Stethoscope, Sparkles } from "lucide-react";
+import { useUser } from "@clerk/nextjs";
 
 export type SessionDetail = {
   id: number;
@@ -21,15 +22,20 @@ export type SessionDetail = {
 function HistoryList() {
   const [historyList, setHistoryList] = useState<SessionDetail[]>([]);
   const [loading, setLoading] = useState(true);
+  const { user } = useUser();
 
   useEffect(() => {
     GetHistoryList();
-  }, []);
+  }, [user]);
 
   const GetHistoryList = async () => {
     try {
       setLoading(true);
-      const result = await axios.get("/api/session-chat?sessionId=all");
+      const result = await axios.get("/api/session-chat?sessionId=all", {
+        params: {
+          userEmail: user?.primaryEmailAddress?.emailAddress,
+        },
+      });
       console.log(result.data);
       setHistoryList(result.data);
     } catch (error) {
